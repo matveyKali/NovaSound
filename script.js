@@ -109,9 +109,11 @@
     let history = loadJsonArray('nova_history');
     let audiusHosts = [];
     let audiusHostIndex = 0;
-    let searchState = { query: '', offsets: { audius: 0, ia: 1, hearthis: 0, deezer: 0, itunes: 0 }, tracks: [], loading: false };
+    let pipedHosts = ['https://pipedapi.kavin.rocks', 'https://pipedapi.adminforge.de', 'https://api.piped.private.coffee', 'https://pipedapi.in.projectsegfau.lt', 'https://pipedapi.leptons.xyz'];
+    let pipedHostIndex = 0;
+    let searchState = { query: '', offsets: { audius: 0, ia: 1, hearthis: 0, deezer: 0, itunes: 0, piped: 0 }, tracks: [], loading: false };
     let chartLoaded = false;
-    let wave = { active: false, seed: 'Поп-хиты', queue: [], index: 0, loading: false };
+    let wave = { active: false, seed: 'Поп-хиты', queue: [], index: 0, loading: false, failCount: 0 };
 
     audio.volume = 0.7;
     if (els.volumeSlider) els.volumeSlider.value = 70;
@@ -226,35 +228,72 @@
     }
 
     let playRequest = 0;
+    let waveAdvanceTimer = null;
+    function clearWaveAdvance() { if (waveAdvanceTimer) { clearTimeout(waveAdvanceTimer); waveAdvanceTimer = null; } }
+    function scheduleWaveAdvance(req, trackId, delay) {
+        if (!wave.active) return;
+        clearWaveAdvance();
+        waveAdvanceTimer = setTimeout(() => {
+            waveAdvanceTimer = null;
+            if (!wave.active) return;
+            if (req !== playRequest) return;
+            if (currentTrack && trackId && currentTrack.id !== trackId) return;
+            waveNext();
+        }, delay == null ? 450 : delay);
+    }
+
     async function playTrack(track, queue, fromWave) {
-        if (!track || !track.src) { showToast('Нет аудио для этого трека'); return; }
+        if (!track) return;
         const req = ++playRequest;
+        clearWaveAdvance();
         currentTrack = track;
         if (Array.isArray(queue) && queue.length) currentQueue = queue;
+        wave.failCount = 0;
 
         if (track.needsResolve && !track.full) {
             setPlayerUI(track);
-            showToast('Ищу полный трек в других источниках...');
+            showToast(track.resolveType === 'piped' ? 'Загружаю трек...' : 'Ищу полный трек в других источниках...');
             const resolved = await resolveFullTrack(track);
             if (req !== playRequest) return;
-            if (resolved && resolved.full) {
-                showToast('Найден полный трек: ' + (resolved.resolvedFrom || 'другой источник'));
+            if (resolved && resolved.full && resolved.src) {
                 rerenderVisibleLists();
-            } else if (!track.previewSrc) {
-                showToast('Полная версия не найдена в открытых источниках');
-                if (wave.active || fromWave) setTimeout(() => waveNext(), 700);
-                return;
-            } else {
+            } else if (track.previewSrc) {
                 track.src = track.previewSrc;
+                track.needsResolve = false;
                 showToast('Полная версия не найдена, играю превью');
                 rerenderVisibleLists();
+            } else {
+                showToast('Полная версия не найдена, пропускаю');
+                rerenderVisibleLists();
+                if ((wave.active || fromWave) && req === playRequest) scheduleWaveAdvance(req, track.id, 350);
+                return;
             }
         }
 
+        if (!track.src) { showToast('Нет аудио для этого трека'); if ((wave.active || fromWave) && req === playRequest) scheduleWaveAdvance(req, track.id, 350); return; }
+
         setPlayerUI(track);
+        try { audio.pause(); } catch (_) {}
         audio.src = track.src;
         addToHistory(track);
-        audio.play().then(() => { isPlaying = true; updatePlayButtons(); }).catch(() => { isPlaying = false; updatePlayButtons(); showToast('Источник недоступен, пробую следующий...'); if (wave.active || fromWave) setTimeout(() => waveNext(), 700); });
+        audio.play().then(() => {
+            if (req !== playRequest) return;
+            isPlaying = true;
+            wave.failCount = 0;
+            updatePlayButtons();
+        }).catch(() => {
+            if (req !== playRequest) return;
+            isPlaying = false;
+            updatePlayButtons();
+            if (wave.active || fromWave) {
+                wave.failCount = (wave.failCount || 0) + 1;
+                showToast('Источник недоступен, пробую следующий...');
+                scheduleWaveAdvance(req, track.id, 350);
+            } else {
+                showToast('Не удалось воспроизвести трек');
+            }
+        });
+
         if (wave.active) {
             const idx = wave.queue.findIndex(t => t.id === track.id);
             if (idx >= 0) wave.index = idx;
@@ -380,6 +419,65 @@
         }).filter(t => t.src);
     }
 
+    async function pipedRequest(path) {
+        for (let i = 0; i < pipedHosts.length; i++) {
+            const host = pipedHosts[(pipedHostIndex + i) % pipedHosts.length];
+            try {
+                const data = await fetchJson(host + path, 12000);
+                pipedHostIndex = (pipedHostIndex + i) % pipedHosts.length;
+                return { host, data };
+            } catch (_) {}
+        }
+        throw new Error('Piped unavailable');
+    }
+
+    async function resolvePipedStream(videoId) {
+        for (let i = 0; i < pipedHosts.length; i++) {
+            const host = pipedHosts[(pipedHostIndex + i) % pipedHosts.length];
+            try {
+                const data = await fetchJson(host + '/streams/' + encodeURIComponent(videoId), 12000);
+                const streams = (data && (data.audioStreams || data.audio_streams)) || [];
+                if (!streams.length) continue;
+                const m4a = streams.filter(s => /mp4|m4a/i.test(s.mimeType || s.mime_type || s.format || ''));
+                const pick = (m4a.length ? m4a : streams).slice().sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
+                const url = pick && (pick.url || pick.uri);
+                if (url) { pipedHostIndex = (pipedHostIndex + i) % pipedHosts.length; return { url, duration: data.duration || 0 }; }
+            } catch (_) {}
+        }
+        return null;
+    }
+
+    async function searchPiped(query, offset) {
+        try {
+            const q = String(query || '').trim();
+            if (!q) return [];
+            const { data } = await pipedRequest('/search?q=' + encodeURIComponent(q) + '&filter=music_songs');
+            const items = (data && (data.items || data)) || [];
+            const list = Array.isArray(items) ? items : [];
+            const start = Math.max(0, (offset || 0));
+            return list.slice(start, start + 20).map(it => {
+                const vid = (it.url || '').replace('/watch?v=', '').split('&')[0] || it.id || '';
+                if (!vid) return null;
+                const duration = it.duration && it.duration > 0 ? it.duration : 0;
+                return {
+                    id: 'piped-' + vid,
+                    pipedId: vid,
+                    title: it.title || 'Без названия',
+                    artist: it.uploaderName || it.uploader || 'YouTube Music',
+                    cover: it.thumbnail || '',
+                    src: '',
+                    previewSrc: '',
+                    durationLabel: duration ? formatTime(duration) : '',
+                    originalDuration: duration,
+                    source: 'YT Music',
+                    full: false,
+                    needsResolve: true,
+                    resolveType: 'piped'
+                };
+            }).filter(Boolean);
+        } catch (_) { return []; }
+    }
+
     async function searchDeezer(query, offset) {
         const off = offset || 0;
         const data = await jsonp('https://api.deezer.com/search?q=' + encodeURIComponent(query) + '&limit=25&index=' + off + '&output=jsonp', 12000);
@@ -434,16 +532,50 @@
         track.resolving = true;
         const q = ((track.artist || '') + ' ' + (track.title || '')).trim();
         try {
+            if (track.resolveType === 'piped' && track.pipedId) {
+                const s = await resolvePipedStream(track.pipedId);
+                if (s && s.url) {
+                    track.src = s.url;
+                    track.full = true;
+                    track.needsResolve = false;
+                    track.source = 'YT Music';
+                    if (s.duration) track.durationLabel = formatTime(s.duration);
+                    track.resolving = false;
+                    return track;
+                }
+            }
+
             const tasks = [
-                searchAudius(q, 10, 0).catch(() => []),
+                searchAudius(q, 12, 0).catch(() => []),
                 searchHearThis(q, 1).catch(() => []),
                 searchIA(q, 1, 10).catch(() => [])
             ];
             const res = await Promise.all(tasks);
-            const candidates = dedupe([].concat(res[0] || [], res[1] || [], res[2] || []));
-            const match = candidates.find(c => c && c.src && c.full && titleMatches(c.title, track.title));
+            let candidates = dedupe([].concat(res[0] || [], res[1] || [], res[2] || []));
+            let match = candidates.find(c => c && c.src && c.full && titleMatches(c.title, track.title));
+
+            if (!match) {
+                const piped = await searchPiped(q, 0).catch(() => []);
+                const p = piped.find(c => c && titleMatches(c.title, track.title));
+                if (p && p.pipedId) {
+                    const s = await resolvePipedStream(p.pipedId);
+                    if (s && s.url) {
+                        track.originalSource = track.source;
+                        track.src = s.url;
+                        track.full = true;
+                        track.needsResolve = false;
+                        if (!track.cover || /placeholder/.test(track.cover)) track.cover = p.cover || track.cover;
+                        if (s.duration) track.durationLabel = formatTime(s.duration); else if (p.durationLabel) track.durationLabel = p.durationLabel;
+                        track.source = (track.originalSource || track.source) + ' → YT Music';
+                        track.resolvedFrom = 'YT Music';
+                        track.resolving = false;
+                        return track;
+                    }
+                }
+            }
+
             if (match) {
-                track.originalSource = track.source;
+                track.originalSource = track.originalSource || track.source;
                 track.src = match.src;
                 track.full = true;
                 track.needsResolve = false;
@@ -460,23 +592,24 @@
     async function aggregateSearch(query, offsets) {
         const q = query;
         const tasks = [
-            searchAudius(q, 40, offsets.audius || 0).catch(() => []),
+            searchAudius(q, 50, offsets.audius || 0).catch(() => []),
             searchHearThis(q, (offsets.hearthis || 0) + 1).catch(() => []),
             searchIA(q, offsets.ia || 1, 20).catch(() => []),
             searchDeezer(q, offsets.deezer || 0).catch(() => []),
-            searchItunes(q, offsets.itunes || 0).catch(() => [])
+            searchItunes(q, offsets.itunes || 0).catch(() => []),
+            searchPiped(q, offsets.piped || 0).catch(() => [])
         ];
         const res = await Promise.all(tasks);
-        const [a, h, ia, d, it] = res.map(r => r || []);
-        const full = dedupe([].concat(a, h, ia));
-        const preview = dedupe([].concat(d, it)).filter(p => !full.some(f => titleMatches(f.title, p.title) && normalizeTitle(f.artist) === normalizeTitle(p.artist)));
-        return { tracks: dedupe([].concat(full, preview)), counts: { audius: a.length, hearthis: h.length, ia: ia.length, deezer: d.length, itunes: it.length } };
+        const [a, h, ia, d, it, p] = res.map(r => r || []);
+        const full = dedupe([].concat(a, h, ia, p));
+        const preview = dedupe([].concat(d, it)).filter(pr => !full.some(f => titleMatches(f.title, pr.title) && normalizeTitle(f.artist) === normalizeTitle(pr.artist)));
+        return { tracks: dedupe([].concat(full, preview)), counts: { audius: a.length, hearthis: h.length, ia: ia.length, deezer: d.length, itunes: it.length, piped: p.length } };
     }
 
     async function runSearch(reset) {
         const q = searchState.query; if (!q || searchState.loading) return;
         searchState.loading = true;
-        if (reset) { searchState.offsets = { audius: 0, ia: 1, hearthis: 0, deezer: 0, itunes: 0 }; searchState.tracks = []; if (els.searchResults) els.searchResults._lastTracks = []; }
+        if (reset) { searchState.offsets = { audius: 0, ia: 1, hearthis: 0, deezer: 0, itunes: 0, piped: 0 }; searchState.tracks = []; if (els.searchResults) els.searchResults._lastTracks = []; }
         if (els.searchStatus) els.searchStatus.textContent = reset ? 'Ищу по всем доступным каталогам...' : 'Загружаю ещё результаты...';
         if (els.loadMoreWrap) els.loadMoreWrap.style.display = 'none';
         try {
@@ -484,15 +617,16 @@
             const merged = dedupe(searchState.tracks.concat(tracks));
             const added = merged.length - searchState.tracks.length;
             searchState.tracks = merged;
-            searchState.offsets.audius += 40; searchState.offsets.hearthis += 1; searchState.offsets.ia += 1; searchState.offsets.deezer += 25; searchState.offsets.itunes += 25;
+            searchState.offsets.audius += 50; searchState.offsets.hearthis += 1; searchState.offsets.ia += 1; searchState.offsets.deezer += 25; searchState.offsets.itunes += 25; searchState.offsets.piped += 20;
             if (!merged.length) {
                 if (els.searchStatus) els.searchStatus.textContent = 'Ничего не найдено. Попробуйте другой запрос (латиницей/кириллицей).';
                 if (els.searchResults) els.searchResults.innerHTML = '<div class="empty-state"><i class="fas fa-circle-exclamation"></i><h3>Ничего не найдено</h3><p>В открытых каталогах этого нет или источники недоступны. Попробуйте изменить запрос.</p></div>';
             } else {
                 if (els.searchResults) { els.searchResults._lastTracks = null; renderTracks(merged, els.searchResults); }
-                const parts = []; if (counts.audius) parts.push('Audius ' + counts.audius); if (counts.hearthis) parts.push('HearThis ' + counts.hearthis); if (counts.ia) parts.push('Archive ' + counts.ia); if (counts.deezer) parts.push('Deezer ' + counts.deezer); if (counts.itunes) parts.push('iTunes ' + counts.itunes);
-                const fullCount = merged.filter(t => t.full).length;
-                if (els.searchStatus) els.searchStatus.textContent = 'Найдено: ' + merged.length + ' (целиком: ' + fullCount + ', превью: ' + (merged.length - fullCount) + ')' + (parts.length ? ' — ' + parts.join(', ') : '') + '.';
+                const parts = []; if (counts.audius) parts.push('Audius ' + counts.audius); if (counts.hearthis) parts.push('HearThis ' + counts.hearthis); if (counts.ia) parts.push('Archive ' + counts.ia); if (counts.piped) parts.push('YT Music ' + counts.piped); if (counts.deezer) parts.push('Deezer ' + counts.deezer); if (counts.itunes) parts.push('iTunes ' + counts.itunes);
+                const fullCount = merged.filter(t => t.full || t.needsResolve).length;
+                const readyFull = merged.filter(t => t.full).length;
+                if (els.searchStatus) els.searchStatus.textContent = 'Найдено: ' + merged.length + ' (полных/конвертируемых: ' + fullCount + ', готовы: ' + readyFull + ')' + (parts.length ? ' — ' + parts.join(', ') : '') + '.';
                 if (els.loadMoreWrap) els.loadMoreWrap.style.display = added > 0 ? 'flex' : 'none';
             }
         } catch (_) {
@@ -547,13 +681,14 @@
 
     async function fetchWaveTracks(seed, offset) {
         const q = (MIXES.find(m => m.title === seed) || {}).query || seed || 'popular music';
-        const { tracks } = await aggregateSearch(q, { audius: offset || 0, hearthis: Math.floor((offset || 0) / 40), ia: Math.floor((offset || 0) / 40) + 1, deezer: offset || 0, itunes: offset || 0 });
+        const { tracks } = await aggregateSearch(q, { audius: offset || 0, hearthis: Math.floor((offset || 0) / 40), ia: Math.floor((offset || 0) / 40) + 1, deezer: offset || 0, itunes: offset || 0, piped: offset || 0 });
         return dedupe(tracks);
     }
 
     async function startWave(seed, navigate) {
+        clearWaveAdvance();
         wave.seed = seed || wave.seed || 'Поп-хиты';
-        wave.active = true; wave.loading = true; wave.queue = []; wave.index = 0;
+        wave.active = true; wave.loading = true; wave.queue = []; wave.index = 0; wave.failCount = 0;
         updateWaveStage(null); updatePlayButtons(); if (navigate) showPage('wave');
         if (els.wavePlayBtn) els.wavePlayBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Загрузка...';
         const tracks = await fetchWaveTracks(wave.seed, 0).catch(() => []);
@@ -570,22 +705,61 @@
         const seed = (pick.artist || pick.title || 'music').split(/[,(&]/)[0].trim();
         startWave(seed, true);
     }
-    async function ensureWaveAhead() {
+    async function ensureWaveAhead(force) {
         if (!wave.active || wave.loading) return;
-        if (wave.queue.length - wave.index > 5) return;
+        if (!force && wave.queue.length - wave.index > 6) return;
         wave.loading = true;
+        const before = wave.queue.length;
         const more = await fetchWaveTracks(wave.seed, wave.queue.length).catch(() => []);
         wave.queue = dedupe(wave.queue.concat(more));
         wave.loading = false;
         renderTracks(wave.queue, els.waveQueue);
+        if (force && wave.queue.length === before) return false;
+        return true;
     }
-    function waveNext() { if (!wave.queue.length) { startWave(wave.seed, false); return; } wave.index = Math.min(wave.index + 1, wave.queue.length - 1); playTrack(wave.queue[wave.index], wave.queue, true); ensureWaveAhead(); }
-    function wavePrev() { if (!wave.queue.length) return; wave.index = Math.max(wave.index - 1, 0); playTrack(wave.queue[wave.index], wave.queue, true); }
+    async function waveNext() {
+        if (!wave.active) return;
+        clearWaveAdvance();
+        if (!wave.queue.length) { await startWave(wave.seed, false); return; }
+        let nextIndex = wave.index + 1;
+        if (nextIndex >= wave.queue.length) {
+            await ensureWaveAhead(true);
+            if (nextIndex >= wave.queue.length) {
+                if ((wave.failCount || 0) >= 5) { showToast('Не удалось продолжить волну, попробуйте другой микс'); return; }
+                nextIndex = wave.queue.length ? 0 : 0;
+                if (!wave.queue.length) return;
+            }
+        }
+        if (nextIndex === wave.index && wave.queue.length > 1) nextIndex = (wave.index + 1) % wave.queue.length;
+        wave.index = Math.max(0, Math.min(nextIndex, wave.queue.length - 1));
+        playTrack(wave.queue[wave.index], wave.queue, true);
+        ensureWaveAhead();
+    }
+    function wavePrev() {
+        if (!wave.queue.length) return;
+        clearWaveAdvance();
+        wave.index = Math.max(wave.index - 1, 0);
+        playTrack(wave.queue[wave.index], wave.queue, true);
+    }
 
     audio.addEventListener('timeupdate', () => updateProgressUI(audio.currentTime, audio.duration));
     audio.addEventListener('loadedmetadata', () => updateProgressUI(audio.currentTime, audio.duration));
-    audio.addEventListener('ended', () => { isPlaying = false; updatePlayButtons(); if (wave.active) waveNext(); else playByOffset(1); });
-    audio.addEventListener('error', () => { if (currentTrack) { showToast('Источник недоступен, пробую следующий...'); if (wave.active) setTimeout(waveNext, 600); } });
+    audio.addEventListener('ended', () => {
+        isPlaying = false; updatePlayButtons();
+        if (wave.active) { wave.failCount = 0; scheduleWaveAdvance(playRequest, currentTrack ? currentTrack.id : null, 250); }
+        else playByOffset(1);
+    });
+    audio.addEventListener('error', () => {
+        if (!currentTrack) return;
+        const req = playRequest;
+        if (wave.active) {
+            wave.failCount = (wave.failCount || 0) + 1;
+            showToast('Источник недоступен, пробую следующий...');
+            scheduleWaveAdvance(req, currentTrack.id, 350);
+        } else {
+            isPlaying = false; updatePlayButtons();
+        }
+    });
 
     if (els.playPauseBtn) els.playPauseBtn.addEventListener('click', togglePlay);
     if (els.expandedPlayPauseBtn) els.expandedPlayPauseBtn.addEventListener('click', togglePlay);
