@@ -54,6 +54,8 @@
         heroSearchBtn: document.getElementById('heroSearchBtn'),
         refreshChartBtn: document.getElementById('refreshChartBtn'),
         searchStatus: document.getElementById('searchStatus'),
+        searchHint: document.getElementById('searchHint'),
+        searchMode: document.getElementById('searchMode'),
         searchChips: document.getElementById('searchChips'),
         waveSeeds: document.getElementById('waveSeeds'),
         loadMoreWrap: document.getElementById('loadMoreWrap'),
@@ -111,9 +113,34 @@
     let audiusHostIndex = 0;
     let pipedHosts = ['https://pipedapi.kavin.rocks', 'https://pipedapi.adminforge.de', 'https://api.piped.private.coffee', 'https://pipedapi.in.projectsegfau.lt', 'https://pipedapi.leptons.xyz'];
     let pipedHostIndex = 0;
+    let sourceMode = localStorage.getItem('nova_source_mode') || 'all';
     let searchState = { query: '', offsets: { audius: 0, ia: 1, hearthis: 0, deezer: 0, itunes: 0, piped: 0 }, tracks: [], loading: false };
     let chartLoaded = false;
     let wave = { active: false, seed: 'Поп-хиты', queue: [], index: 0, loading: false, failCount: 0 };
+
+    function isYtMode() { return sourceMode === 'yt'; }
+    function updateModeUI() {
+        if (els.searchMode) {
+            els.searchMode.querySelectorAll('.mode-btn').forEach(btn => btn.classList.toggle('active', btn.getAttribute('data-mode') === sourceMode));
+        }
+        if (els.searchHint) {
+            els.searchHint.textContent = isYtMode()
+                ? 'Режим: только YouTube Music. Поиск и воспроизведение идут через доступные Piped-инстансы (полные треки).'
+                : 'Поиск по открытым каталогам (Audius, HearThis, Internet Archive, YT Music, Deezer, iTunes). Превью автоматически пытаются замениться на полный трек из доступных источников.';
+        }
+    }
+    function setSourceMode(mode) {
+        const next = mode === 'yt' ? 'yt' : 'all';
+        if (next === sourceMode) return;
+        sourceMode = next;
+        try { localStorage.setItem('nova_source_mode', sourceMode); } catch (_) {}
+        updateModeUI();
+        chartLoaded = false;
+        if (els.chartList) els.chartList._lastTracks = [];
+        if (els.homeSection && els.homeSection.style.display !== 'none') loadChart(true);
+        if (searchState.query && els.searchSection && els.searchSection.style.display !== 'none') searchOnline(searchState.query);
+        showToast(isYtMode() ? 'Режим: только YouTube Music' : 'Режим: все источники');
+    }
 
     audio.volume = 0.7;
     if (els.volumeSlider) els.volumeSlider.value = 70;
@@ -246,24 +273,26 @@
         if (!track) return;
         const req = ++playRequest;
         clearWaveAdvance();
+        const originalSrc = track.src;
         currentTrack = track;
         if (Array.isArray(queue) && queue.length) currentQueue = queue;
         wave.failCount = 0;
 
         if (track.needsResolve && !track.full) {
             setPlayerUI(track);
-            showToast(track.resolveType === 'piped' ? 'Загружаю трек...' : 'Ищу полный трек в других источниках...');
+            showToast(track.resolveType === 'piped' || isYtMode() ? 'Загружаю трек...' : 'Ищу полный трек в других источниках...');
             const resolved = await resolveFullTrack(track);
             if (req !== playRequest) return;
             if (resolved && resolved.full && resolved.src) {
                 rerenderVisibleLists();
-            } else if (track.previewSrc) {
-                track.src = track.previewSrc;
+            } else if (!isYtMode() && (track.previewSrc || originalSrc)) {
+                track.src = track.previewSrc || originalSrc;
                 track.needsResolve = false;
+                track.full = false;
                 showToast('Полная версия не найдена, играю превью');
                 rerenderVisibleLists();
             } else {
-                showToast('Полная версия не найдена, пропускаю');
+                showToast(isYtMode() ? 'Не найдено в YouTube Music, пропускаю' : 'Полная версия не найдена, пропускаю');
                 rerenderVisibleLists();
                 if ((wave.active || fromWave) && req === playRequest) scheduleWaveAdvance(req, track.id, 350);
                 return;
@@ -285,6 +314,21 @@
             if (req !== playRequest) return;
             isPlaying = false;
             updatePlayButtons();
+            if (!isYtMode() && track.previewSrc && track.src !== track.previewSrc && !track._previewTried) {
+                track._previewTried = true;
+                track.src = track.previewSrc;
+                track.full = false;
+                track.needsResolve = false;
+                showToast('Не удалось воспроизвести, играю превью');
+                setPlayerUI(track);
+                audio.src = track.src;
+                audio.play().then(() => { if (req !== playRequest) return; isPlaying = true; wave.failCount = 0; updatePlayButtons(); }).catch(() => {
+                    if (req !== playRequest) return;
+                    if (wave.active || fromWave) { wave.failCount = (wave.failCount || 0) + 1; showToast('Источник недоступен, пробую следующий...'); scheduleWaveAdvance(req, track.id, 350); }
+                    else showToast('Не удалось воспроизвести трек');
+                });
+                return;
+            }
             if (wave.active || fromWave) {
                 wave.failCount = (wave.failCount || 0) + 1;
                 showToast('Источник недоступен, пробую следующий...');
@@ -532,6 +576,37 @@
         track.resolving = true;
         const q = ((track.artist || '') + ' ' + (track.title || '')).trim();
         try {
+            if (isYtMode()) {
+                if (track.pipedId) {
+                    const s = await resolvePipedStream(track.pipedId);
+                    if (s && s.url) {
+                        track.src = s.url;
+                        track.full = true;
+                        track.needsResolve = false;
+                        track.source = 'YT Music';
+                        if (s.duration) track.durationLabel = formatTime(s.duration);
+                    }
+                } else {
+                    const piped = await searchPiped(q, 0).catch(() => []);
+                    const p = piped.find(c => c && titleMatches(c.title, track.title));
+                    if (p && p.pipedId) {
+                        const s = await resolvePipedStream(p.pipedId);
+                        if (s && s.url) {
+                            track.originalSource = track.originalSource || track.source;
+                            track.src = s.url;
+                            track.full = true;
+                            track.needsResolve = false;
+                            if (!track.cover || /placeholder/.test(track.cover)) track.cover = p.cover || track.cover;
+                            if (s.duration) track.durationLabel = formatTime(s.duration); else if (p.durationLabel) track.durationLabel = p.durationLabel;
+                            track.source = (track.originalSource || '') + ' → YT Music';
+                            track.resolvedFrom = 'YT Music';
+                        }
+                    }
+                }
+                track.resolving = false;
+                return track;
+            }
+
             if (track.resolveType === 'piped' && track.pipedId) {
                 const s = await resolvePipedStream(track.pipedId);
                 if (s && s.url) {
@@ -560,7 +635,7 @@
                 if (p && p.pipedId) {
                     const s = await resolvePipedStream(p.pipedId);
                     if (s && s.url) {
-                        track.originalSource = track.source;
+                        track.originalSource = track.originalSource || track.source;
                         track.src = s.url;
                         track.full = true;
                         track.needsResolve = false;
@@ -581,7 +656,7 @@
                 track.needsResolve = false;
                 if (!track.cover || /placeholder/.test(track.cover)) track.cover = match.cover || track.cover;
                 if (match.durationLabel) track.durationLabel = match.durationLabel;
-                track.source = track.originalSource + ' → ' + match.source;
+                track.source = (track.originalSource || '') + ' → ' + match.source;
                 track.resolvedFrom = match.source;
             }
         } catch (_) {}
@@ -591,6 +666,10 @@
 
     async function aggregateSearch(query, offsets) {
         const q = query;
+        if (isYtMode()) {
+            const p = await searchPiped(q, offsets.piped || 0).catch(() => []);
+            return { tracks: dedupe(p), counts: { piped: p.length } };
+        }
         const tasks = [
             searchAudius(q, 50, offsets.audius || 0).catch(() => []),
             searchHearThis(q, (offsets.hearthis || 0) + 1).catch(() => []),
@@ -610,23 +689,26 @@
         const q = searchState.query; if (!q || searchState.loading) return;
         searchState.loading = true;
         if (reset) { searchState.offsets = { audius: 0, ia: 1, hearthis: 0, deezer: 0, itunes: 0, piped: 0 }; searchState.tracks = []; if (els.searchResults) els.searchResults._lastTracks = []; }
-        if (els.searchStatus) els.searchStatus.textContent = reset ? 'Ищу по всем доступным каталогам...' : 'Загружаю ещё результаты...';
+        if (els.searchStatus) els.searchStatus.textContent = reset ? (isYtMode() ? 'Ищу в YouTube Music...' : 'Ищу по всем доступным каталогам...') : 'Загружаю ещё результаты...';
         if (els.loadMoreWrap) els.loadMoreWrap.style.display = 'none';
         try {
             const { tracks, counts } = await aggregateSearch(q, searchState.offsets);
             const merged = dedupe(searchState.tracks.concat(tracks));
             const added = merged.length - searchState.tracks.length;
             searchState.tracks = merged;
-            searchState.offsets.audius += 50; searchState.offsets.hearthis += 1; searchState.offsets.ia += 1; searchState.offsets.deezer += 25; searchState.offsets.itunes += 25; searchState.offsets.piped += 20;
+            if (isYtMode()) { searchState.offsets.piped += 20; }
+            else { searchState.offsets.audius += 50; searchState.offsets.hearthis += 1; searchState.offsets.ia += 1; searchState.offsets.deezer += 25; searchState.offsets.itunes += 25; searchState.offsets.piped += 20; }
             if (!merged.length) {
-                if (els.searchStatus) els.searchStatus.textContent = 'Ничего не найдено. Попробуйте другой запрос (латиницей/кириллицей).';
-                if (els.searchResults) els.searchResults.innerHTML = '<div class="empty-state"><i class="fas fa-circle-exclamation"></i><h3>Ничего не найдено</h3><p>В открытых каталогах этого нет или источники недоступны. Попробуйте изменить запрос.</p></div>';
+                if (els.searchStatus) els.searchStatus.textContent = isYtMode() ? 'В YouTube Music ничего не найдено. Попробуйте другой запрос.' : 'Ничего не найдено. Попробуйте другой запрос (латиницей/кириллицей).';
+                if (els.searchResults) els.searchResults.innerHTML = '<div class="empty-state"><i class="fas fa-circle-exclamation"></i><h3>Ничего не найдено</h3><p>' + esc(isYtMode() ? 'Попробуйте другой запрос или проверьте доступность YouTube Music.' : 'В открытых каталогах этого нет или источники недоступны. Попробуйте изменить запрос.') + '</p></div>';
             } else {
                 if (els.searchResults) { els.searchResults._lastTracks = null; renderTracks(merged, els.searchResults); }
-                const parts = []; if (counts.audius) parts.push('Audius ' + counts.audius); if (counts.hearthis) parts.push('HearThis ' + counts.hearthis); if (counts.ia) parts.push('Archive ' + counts.ia); if (counts.piped) parts.push('YT Music ' + counts.piped); if (counts.deezer) parts.push('Deezer ' + counts.deezer); if (counts.itunes) parts.push('iTunes ' + counts.itunes);
+                const parts = [];
+                if (isYtMode()) { if (counts.piped) parts.push('YT Music ' + counts.piped); }
+                else { if (counts.audius) parts.push('Audius ' + counts.audius); if (counts.hearthis) parts.push('HearThis ' + counts.hearthis); if (counts.ia) parts.push('Archive ' + counts.ia); if (counts.piped) parts.push('YT Music ' + counts.piped); if (counts.deezer) parts.push('Deezer ' + counts.deezer); if (counts.itunes) parts.push('iTunes ' + counts.itunes); }
                 const fullCount = merged.filter(t => t.full || t.needsResolve).length;
                 const readyFull = merged.filter(t => t.full).length;
-                if (els.searchStatus) els.searchStatus.textContent = 'Найдено: ' + merged.length + ' (полных/конвертируемых: ' + fullCount + ', готовы: ' + readyFull + ')' + (parts.length ? ' — ' + parts.join(', ') : '') + '.';
+                if (els.searchStatus) els.searchStatus.textContent = 'Найдено: ' + merged.length + (isYtMode() ? '' : ' (полных/конвертируемых: ' + fullCount + ', готовы: ' + readyFull + ')') + (parts.length ? ' — ' + parts.join(', ') : '') + '.';
                 if (els.loadMoreWrap) els.loadMoreWrap.style.display = added > 0 ? 'flex' : 'none';
             }
         } catch (_) {
@@ -644,10 +726,17 @@
         if (chartLoaded && !force) return; if (!els.chartList) return;
         els.chartList.innerHTML = '<div class="empty-state"><i class="fas fa-spinner fa-spin"></i><h3>Загружаем чарт...</h3></div>';
         try {
-            let tracks = await searchAudius('', 30, 0).catch(() => []);
-            if (tracks.length < 10) { const extra = await searchHearThis('top hits', 1).catch(() => []); tracks = dedupe(tracks.concat(extra)); }
+            let tracks = [];
+            if (isYtMode()) {
+                tracks = await searchPiped('топ хиты 2025', 0).catch(() => []);
+                if (tracks.length < 10) { const extra = await searchPiped('popular music hits', 0).catch(() => []); tracks = dedupe(tracks.concat(extra)); }
+            } else {
+                tracks = await searchAudius('', 30, 0).catch(() => []);
+                if (tracks.length < 10) { const extra = await searchHearThis('top hits', 1).catch(() => []); tracks = dedupe(tracks.concat(extra)); }
+                if (tracks.length < 10) { const extra = await searchPiped('топ хиты', 0).catch(() => []); tracks = dedupe(tracks.concat(extra)); }
+            }
             chartLoaded = true;
-            if (tracks.length) renderChart(tracks.slice(0, 20)); else els.chartList.innerHTML = '<div class="empty-state"><i class="fas fa-chart-line"></i><h3>Чарт недоступен</h3><p>Откройте поиск.</p></div>';
+            if (tracks.length) renderChart(tracks.slice(0, 20)); else els.chartList.innerHTML = '<div class="empty-state"><i class="fas fa-chart-line"></i><h3>Чарт недоступен</h3><p>Откройте поиск или переключите режим.</p></div>';
         } catch (_) { els.chartList.innerHTML = '<div class="empty-state"><i class="fas fa-chart-line"></i><h3>Чарт недоступен</h3><p>Откройте поиск.</p></div>'; }
     }
     function ensureChart() { if (!chartLoaded) loadChart(false); }
@@ -681,6 +770,10 @@
 
     async function fetchWaveTracks(seed, offset) {
         const q = (MIXES.find(m => m.title === seed) || {}).query || seed || 'popular music';
+        if (isYtMode()) {
+            const tracks = await searchPiped(q, offset || 0).catch(() => []);
+            return dedupe(tracks);
+        }
         const { tracks } = await aggregateSearch(q, { audius: offset || 0, hearthis: Math.floor((offset || 0) / 40), ia: Math.floor((offset || 0) / 40) + 1, deezer: offset || 0, itunes: offset || 0, piped: offset || 0 });
         return dedupe(tracks);
     }
@@ -806,6 +899,11 @@
         if (name === 'history') renderHistory();
         if (name === 'local') renderLocal();
     }));
+
+    if (els.searchMode) {
+        els.searchMode.querySelectorAll('.mode-btn').forEach(btn => btn.addEventListener('click', () => setSourceMode(btn.getAttribute('data-mode') || 'all')));
+    }
+    updateModeUI();
 
     renderSearchChips();
     renderMixes();

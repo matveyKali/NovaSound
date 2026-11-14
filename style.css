@@ -126,6 +126,9 @@ body {
 .mix-card::before { content: ''; position: absolute; inset: 0; background: var(--mix-bg, linear-gradient(135deg, #333, #222)); opacity: 0.9; }
 
 /* Search */
+.search-mode { display: inline-flex; gap: 6px; padding: 4px; background: var(--bg-card); border: 1px solid var(--glass-border); border-radius: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.mode-btn { background: transparent; border: none; color: var(--text-muted); padding: 8px 14px; border-radius: 10px; cursor: pointer; font: inherit; font-size: 0.9rem; font-weight: 600; transition: var(--transition); }
+.mode-btn.active { background: var(--accent-grad); color: #111; }
 .search-panel { display: flex; gap: 12px; margin-bottom: 12px; align-items: center; }
 .search-input-wrap { flex: 1; position: relative; }
 .search-input-wrap i { position: absolute; left: 16px; top: 50%; transform: translateY(-50%); color: var(--text-muted); }
