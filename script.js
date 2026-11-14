@@ -299,7 +299,16 @@
             }
         }
 
-        if (!track.src) { showToast('Нет аудио для этого трека'); if ((wave.active || fromWave) && req === playRequest) scheduleWaveAdvance(req, track.id, 350); return; }
+        if (!track.src) {
+            if (!isYtMode() && (track.previewSrc || originalSrc)) {
+                track.src = track.previewSrc || originalSrc;
+                track.full = false;
+            } else {
+                showToast('Нет аудио для этого трека');
+                if ((wave.active || fromWave) && req === playRequest) scheduleWaveAdvance(req, track.id, 350);
+                return;
+            }
+        }
 
         setPlayerUI(track);
         try { audio.pause(); } catch (_) {}
@@ -482,8 +491,17 @@
                 const data = await fetchJson(host + '/streams/' + encodeURIComponent(videoId), 12000);
                 const streams = (data && (data.audioStreams || data.audio_streams)) || [];
                 if (!streams.length) continue;
-                const m4a = streams.filter(s => /mp4|m4a/i.test(s.mimeType || s.mime_type || s.format || ''));
-                const pick = (m4a.length ? m4a : streams).slice().sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
+                const playable = streams.filter(s => {
+                    const url = s && (s.url || s.uri);
+                    const mime = String((s.mimeType || s.mime_type || s.format || '')).toLowerCase();
+                    if (!url) return false;
+                    if (/webm|opus/i.test(mime)) return false;
+                    return true;
+                });
+                const pool = playable.length ? playable : streams.filter(s => s && (s.url || s.uri));
+                if (!pool.length) continue;
+                const m4a = pool.filter(s => /mp4|m4a|aac/i.test(String(s.mimeType || s.mime_type || s.format || '')));
+                const pick = (m4a.length ? m4a : pool).slice().sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
                 const url = pick && (pick.url || pick.uri);
                 if (url) { pipedHostIndex = (pipedHostIndex + i) % pipedHosts.length; return { url, duration: data.duration || 0 }; }
             } catch (_) {}
@@ -586,20 +604,24 @@
                         track.source = 'YT Music';
                         if (s.duration) track.durationLabel = formatTime(s.duration);
                     }
-                } else {
+                }
+                if (!track.full) {
                     const piped = await searchPiped(q, 0).catch(() => []);
-                    const p = piped.find(c => c && titleMatches(c.title, track.title));
-                    if (p && p.pipedId) {
+                    const candidates = piped.filter(c => c && c.pipedId && (titleMatches(c.title, track.title) || titleMatches(c.artist, track.artist)));
+                    const list = candidates.length ? candidates : piped.slice(0, 5);
+                    for (const p of list) {
                         const s = await resolvePipedStream(p.pipedId);
                         if (s && s.url) {
                             track.originalSource = track.originalSource || track.source;
+                            track.pipedId = track.pipedId || p.pipedId;
                             track.src = s.url;
                             track.full = true;
                             track.needsResolve = false;
                             if (!track.cover || /placeholder/.test(track.cover)) track.cover = p.cover || track.cover;
                             if (s.duration) track.durationLabel = formatTime(s.duration); else if (p.durationLabel) track.durationLabel = p.durationLabel;
-                            track.source = (track.originalSource || '') + ' → YT Music';
+                            track.source = (track.originalSource || track.source || '') + ' → YT Music';
                             track.resolvedFrom = 'YT Music';
+                            break;
                         }
                     }
                 }
@@ -631,8 +653,9 @@
 
             if (!match) {
                 const piped = await searchPiped(q, 0).catch(() => []);
-                const p = piped.find(c => c && titleMatches(c.title, track.title));
-                if (p && p.pipedId) {
+                const cand = piped.filter(c => c && c.pipedId && (titleMatches(c.title, track.title) || titleMatches(c.artist, track.artist)));
+                const list = cand.length ? cand : piped.slice(0, 5);
+                for (const p of list) {
                     const s = await resolvePipedStream(p.pipedId);
                     if (s && s.url) {
                         track.originalSource = track.originalSource || track.source;
