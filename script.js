@@ -296,6 +296,37 @@ document.addEventListener('DOMContentLoaded', function () {
         if (page === 'search' && els.searchInput) els.searchInput.focus();
     }
 
+    function itunesJsonp(query) {
+        return new Promise((resolve, reject) => {
+            const cb = 'itunesCb_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
+            const script = document.createElement('script');
+            let done = false;
+            const cleanup = () => {
+                if (done) return;
+                done = true;
+                try { delete window[cb]; } catch (_) { window[cb] = undefined; }
+                if (script.parentNode) script.parentNode.removeChild(script);
+            };
+            window[cb] = (data) => { cleanup(); resolve(data); };
+            script.onerror = () => { cleanup(); reject(new Error('JSONP error')); };
+            script.src = 'https://itunes.apple.com/search?term=' + encodeURIComponent(query) + '&media=music&entity=song&limit=24&callback=' + cb;
+            document.body.appendChild(script);
+            setTimeout(() => { if (!done) { cleanup(); reject(new Error('timeout')); } }, 10000);
+        });
+    }
+
+    function mapItunesResults(data) {
+        return (data && data.results ? data.results : []).map(item => ({
+            id: 'itunes-' + item.trackId,
+            title: item.trackName || 'Без названия',
+            artist: item.artistName || 'Неизвестный исполнитель',
+            cover: item.artworkUrl100 ? item.artworkUrl100.replace('100x100bb', '300x300bb') : '',
+            src: item.previewUrl || '',
+            durationLabel: item.trackTimeMillis ? formatTime(item.trackTimeMillis / 1000) : 'Превью',
+            source: 'iTunes'
+        })).filter(t => t.src);
+    }
+
     async function searchOnline(query) {
         const q = (query || '').trim();
         if (!q) {
@@ -306,29 +337,45 @@ document.addEventListener('DOMContentLoaded', function () {
         if (els.searchStatus) els.searchStatus.textContent = 'Ищу треки в интернете...';
         if (els.searchResults) els.searchResults.innerHTML = '';
         try {
-            const url = 'https://itunes.apple.com/search?term=' + encodeURIComponent(q) + '&media=music&entity=song&limit=24';
-            const res = await fetch(url);
-            if (!res.ok) throw new Error('HTTP ' + res.status);
-            const data = await res.json();
-            const tracks = (data.results || []).map(item => ({
-                id: 'itunes-' + item.trackId,
-                title: item.trackName || 'Без названия',
-                artist: item.artistName || 'Неизвестный исполнитель',
-                cover: item.artworkUrl100 ? item.artworkUrl100.replace('100x100bb', '300x300bb') : '',
-                src: item.previewUrl || '',
-                durationLabel: item.trackTimeMillis ? formatTime(item.trackTimeMillis / 1000) : 'Превью',
-                source: 'iTunes'
-            }));
+            let data = null;
+            try {
+                const url = 'https://itunes.apple.com/search?term=' + encodeURIComponent(q) + '&media=music&entity=song&limit=24';
+                const res = await fetch(url);
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                data = await res.json();
+            } catch (_) {
+                data = await itunesJsonp(q);
+            }
+            const tracks = mapItunesResults(data);
             if (tracks.length === 0) {
-                if (els.searchStatus) els.searchStatus.textContent = 'Ничего не найдено. Попробуйте другой запрос.';
+                const local = LOCAL_TRACKS.filter(t =>
+                    (t.title || '').toLowerCase().includes(q.toLowerCase()) ||
+                    (t.artist || '').toLowerCase().includes(q.toLowerCase())
+                );
+                if (local.length) {
+                    if (els.searchStatus) els.searchStatus.textContent = 'В интернете ничего не найдено, показаны совпадения из библиотеки.';
+                    renderTracks(local, els.searchResults);
+                } else {
+                    if (els.searchStatus) els.searchStatus.textContent = 'Ничего не найдено. Попробуйте другой запрос.';
+                    renderTracks([], els.searchResults);
+                }
             } else {
                 if (els.searchStatus) els.searchStatus.textContent = 'Найдено треков: ' + tracks.length + '. Доступно прослушивание превью.';
+                renderTracks(tracks, els.searchResults);
             }
-            renderTracks(tracks, els.searchResults);
         } catch (err) {
-            if (els.searchStatus) els.searchStatus.textContent = 'Не удалось выполнить поиск в интернете. Проверьте подключение.';
-            if (els.searchResults) {
-                els.searchResults.innerHTML = '<div class="empty-state"><i class="fas fa-triangle-exclamation"></i><h3>Ошибка поиска</h3><p>Сервис поиска недоступен или заблокирован сетью.</p></div>';
+            const local = LOCAL_TRACKS.filter(t =>
+                (t.title || '').toLowerCase().includes(q.toLowerCase()) ||
+                (t.artist || '').toLowerCase().includes(q.toLowerCase())
+            );
+            if (local.length) {
+                if (els.searchStatus) els.searchStatus.textContent = 'Онлайн-поиск недоступен, показаны совпадения из библиотеки.';
+                renderTracks(local, els.searchResults);
+            } else {
+                if (els.searchStatus) els.searchStatus.textContent = 'Не удалось выполнить поиск в интернете. Проверьте подключение.';
+                if (els.searchResults) {
+                    els.searchResults.innerHTML = '<div class="empty-state"><i class="fas fa-triangle-exclamation"></i><h3>Ошибка поиска</h3><p>Сервис поиска недоступен или заблокирован сетью.</p></div>';
+                }
             }
         }
     }
