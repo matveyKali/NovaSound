@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NovaSound — Музыкальный плеер</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <nav class="sidebar">
+        <div class="logo">
+            <div class="logo-icon">
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="currentColor"/>
+                </svg>
+            </div>
+            <span>NovaSound</span>
+        </div>
+        <ul class="nav-items">
+            <li class="nav-item active" data-page="search">
+                <i class="fas fa-search"></i><span>Поиск</span>
+            </li>
+            <li class="nav-item" data-page="library">
+                <i class="fas fa-music"></i><span>Библиотека</span>
+            </li>
+            <li class="nav-item" data-page="favorites">
+                <i class="fas fa-heart"></i><span>Избранное</span>
+            </li>
+            <li class="nav-item" data-page="charts">
+                <i class="fas fa-crown"></i><span>Чарты</span>
+            </li>
+        </ul>
+        <div class="sidebar-footer">
+            <div class="user-avatar">
+                <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Nova" alt="User">
+            </div>
+            <div class="user-info">
+                <div class="user-name">Пользователь</div>
+                <div class="user-status">NovaSound Premium</div>
+            </div>
+        </div>
+    </nav>
+
+    <main class="main-content">
+        <header class="page-header">
+            <h1 id="pageTitle">Поиск музыки</h1>
+            <div class="search-bar">
+                <i class="fas fa-search search-icon"></i>
+                <input type="text" id="searchInput" placeholder="Поиск треков, исполнителей, альбомов..." autocomplete="off">
+                <button id="searchBtn"><i class="fas fa-search"></i></button>
+            </div>
+        </header>
+
+        <section class="results-section" id="searchSection" style="display:none;">
+            <h2 class="section-title">Результаты поиска</h2>
+            <div class="track-grid" id="trackGrid"></div>
+        </section>
+
+        <section class="results-section" id="chartsSection">
+            <h2 class="section-title">Топ треков</h2>
+            <div class="track-grid" id="chartsGrid"></div>
+        </section>
+
+        <section class="results-section" id="librarySection" style="display:none;">
+            <h2 class="section-title">Ваша библиотека</h2>
+            <p class="empty-state">Библиотека пуста. Начните искать музыку!</p>
+        </section>
+
+        <section class="results-section" id="favoritesSection" style="display:none;">
+            <h2 class="section-title">Избранное</h2>
+            <div class="track-grid" id="favoritesGrid"></div>
+        </section>
+    </main>
+
+    <div class="player-bar" id="playerBar">
+        <div class="player-left">
+            <img id="playerCover" src="" class="player-cover" alt="Обложка">
+            <div class="player-info">
+                <div id="playerTitle">Выберите трек</div>
+                <div id="playerArtist">NovaSound</div>
+            </div>
+        </div>
+        <div class="player-center">
+            <div class="progress-container">
+                <div class="progress-track" id="progressTrack">
+                    <div id="progress"></div>
+                    <div id="progressHandle"></div>
+                </div>
+                <div class="time-display">
+                    <span id="currentTime">0:00</span>
+                    <span id="duration">0:00</span>
+                </div>
+            </div>
+            <div class="player-controls">
+                <button id="prevBtn" class="control-btn"><i class="fas fa-step-backward"></i></button>
+                <button id="playPauseBtn" class="control-btn play-pause"><i class="fas fa-play"></i></button>
+                <button id="nextBtn" class="control-btn"><i class="fas fa-step-forward"></i></button>
+            </div>
+        </div>
+        <div class="player-right">
+            <div class="volume-container">
+                <i class="fas fa-volume-up" id="volumeIcon"></i>
+                <input type="range" id="volume" min="0" max="100" value="70">
+            </div>
+            <button id="likeBtn" class="control-btn like-btn"><i class="far fa-heart"></i></button>
+            <button id="expandBtn" class="control-btn"><i class="fas fa-expand"></i></button>
+        </div>
+    </div>
+
+    <audio id="audioPlayer" crossorigin="anonymous" preload="metadata"></audio>
+
+    <div id="toast" class="toast"></div>
+
+    <script src="script.js"></script>
+</body>
+</html>
