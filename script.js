@@ -1,4 +1,4 @@
-document.addEventListener('DOMContentLoaded', function () {
+﻿document.addEventListener('DOMContentLoaded', function () {
     const audio = document.getElementById('audioPlayer');
 
     const LOCAL_TRACKS = [
@@ -296,35 +296,45 @@ document.addEventListener('DOMContentLoaded', function () {
         if (page === 'search' && els.searchInput) els.searchInput.focus();
     }
 
-    function itunesJsonp(query) {
-        return new Promise((resolve, reject) => {
-            const cb = 'itunesCb_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
-            const script = document.createElement('script');
-            let done = false;
-            const cleanup = () => {
-                if (done) return;
-                done = true;
-                try { delete window[cb]; } catch (_) { window[cb] = undefined; }
-                if (script.parentNode) script.parentNode.removeChild(script);
-            };
-            window[cb] = (data) => { cleanup(); resolve(data); };
-            script.onerror = () => { cleanup(); reject(new Error('JSONP error')); };
-            script.src = 'https://itunes.apple.com/search?term=' + encodeURIComponent(query) + '&media=music&entity=song&limit=24&callback=' + cb;
-            document.body.appendChild(script);
-            setTimeout(() => { if (!done) { cleanup(); reject(new Error('timeout')); } }, 10000);
-        });
+    let audiusHost = null;
+
+    async function getAudiusHost() {
+        if (audiusHost) return audiusHost;
+        try {
+            const res = await fetch('https://api.audius.co');
+            if (res.ok) {
+                const data = await res.json();
+                if (data && Array.isArray(data.data) && data.data.length) {
+                    audiusHost = data.data[0].replace(/\/$/, '');
+                    return audiusHost;
+                }
+            }
+        } catch (_) {}
+        audiusHost = 'https://discoveryprovider.audius.co';
+        return audiusHost;
     }
 
-    function mapItunesResults(data) {
-        return (data && data.results ? data.results : []).map(item => ({
-            id: 'itunes-' + item.trackId,
-            title: item.trackName || 'Без названия',
-            artist: item.artistName || 'Неизвестный исполнитель',
-            cover: item.artworkUrl100 ? item.artworkUrl100.replace('100x100bb', '300x300bb') : '',
-            src: item.previewUrl || '',
-            durationLabel: item.trackTimeMillis ? formatTime(item.trackTimeMillis / 1000) : 'Превью',
-            source: 'iTunes'
-        })).filter(t => t.src);
+    async function searchAudius(query) {
+        const host = await getAudiusHost();
+        const url = host + '/v1/tracks/search?query=' + encodeURIComponent(query) + '&app_name=NovaSound&limit=30';
+        const res = await fetch(url);
+        if (!res.ok) throw new Error('Audius HTTP ' + res.status);
+        const data = await res.json();
+        const list = (data && data.data) ? data.data : [];
+        return list.map(item => {
+            const art = item.artwork || {};
+            const cover = art['480x480'] || art['1000x1000'] || art['150x150'] || (item.user && item.user.profile_picture && (item.user.profile_picture['480x480'] || item.user.profile_picture['150x150'])) || '';
+            const stream = host + '/v1/tracks/' + encodeURIComponent(item.id) + '/stream?app_name=NovaSound';
+            return {
+                id: 'audius-' + item.id,
+                title: item.title || 'Без названия',
+                artist: (item.user && item.user.name) ? item.user.name : 'Неизвестный исполнитель',
+                cover: cover,
+                src: stream,
+                durationLabel: item.duration ? formatTime(item.duration) : '',
+                source: 'Audius'
+            };
+        }).filter(t => t.src);
     }
 
     async function searchOnline(query) {
@@ -337,16 +347,7 @@ document.addEventListener('DOMContentLoaded', function () {
         if (els.searchStatus) els.searchStatus.textContent = 'Ищу треки в интернете...';
         if (els.searchResults) els.searchResults.innerHTML = '';
         try {
-            let data = null;
-            try {
-                const url = 'https://itunes.apple.com/search?term=' + encodeURIComponent(q) + '&media=music&entity=song&limit=24';
-                const res = await fetch(url);
-                if (!res.ok) throw new Error('HTTP ' + res.status);
-                data = await res.json();
-            } catch (_) {
-                data = await itunesJsonp(q);
-            }
-            const tracks = mapItunesResults(data);
+            const tracks = await searchAudius(q);
             if (tracks.length === 0) {
                 const local = LOCAL_TRACKS.filter(t =>
                     (t.title || '').toLowerCase().includes(q.toLowerCase()) ||
@@ -360,7 +361,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     renderTracks([], els.searchResults);
                 }
             } else {
-                if (els.searchStatus) els.searchStatus.textContent = 'Найдено треков: ' + tracks.length + '. Доступно прослушивание превью.';
+                if (els.searchStatus) els.searchStatus.textContent = 'Найдено треков: ' + tracks.length + '. Доступно воспроизведение целиком.';
                 renderTracks(tracks, els.searchResults);
             }
         } catch (err) {
@@ -372,9 +373,9 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (els.searchStatus) els.searchStatus.textContent = 'Онлайн-поиск недоступен, показаны совпадения из библиотеки.';
                 renderTracks(local, els.searchResults);
             } else {
-                if (els.searchStatus) els.searchStatus.textContent = 'Не удалось выполнить поиск в интернете. Проверьте подключение.';
+                if (els.searchStatus) els.searchStatus.textContent = 'Не удалось выполнить поиск. Сервис недоступен или заблокирован сетью.';
                 if (els.searchResults) {
-                    els.searchResults.innerHTML = '<div class="empty-state"><i class="fas fa-triangle-exclamation"></i><h3>Ошибка поиска</h3><p>Сервис поиска недоступен или заблокирован сетью.</p></div>';
+                    els.searchResults.innerHTML = '<div class="empty-state"><i class="fas fa-triangle-exclamation"></i><h3>Ошибка поиска</h3><p>Онлайн-каталог недоступен. Проверьте подключение к интернету.</p></div>';
                 }
             }
         }
