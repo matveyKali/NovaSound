@@ -1,8 +1,8 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>NovaSound — Музыкальный плеер</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -10,17 +10,19 @@
 </head>
 <body>
     <div class="app">
+        <div class="sidebar-overlay" id="sidebarOverlay"></div>
         <aside class="sidebar" id="sidebar">
             <div class="sidebar-header">
                 <div class="logo">
                     <div class="logo-icon"><i class="fas fa-music"></i></div>
                     <div class="logo-text">NovaSound</div>
                 </div>
+                <button class="sidebar-close" id="sidebarClose" aria-label="Закрыть меню"><i class="fas fa-times"></i></button>
             </div>
             <div class="nav-section">
                 <div class="nav-section-title">Навигация</div>
                 <div class="nav-item active" data-page="home"><i class="fas fa-home"></i><span>Главная</span></div>
-                <div class="nav-item" data-page="search"><i class="fas fa-search"></i><span>Поиск в интернете</span></div>
+                <div class="nav-item" data-page="search"><i class="fas fa-search"></i><span>Поиск</span></div>
                 <div class="nav-item" data-page="favorites"><i class="fas fa-heart"></i><span>Избранное</span></div>
             </div>
             <div class="sidebar-footer">
@@ -35,6 +37,12 @@
         </aside>
 
         <div class="main-shell">
+            <header class="mobile-topbar">
+                <button class="mobile-menu-btn" id="mobileMenuBtn" aria-label="Меню"><i class="fas fa-bars"></i></button>
+                <div class="mobile-brand">NovaSound</div>
+                <button class="mobile-search-btn" id="mobileSearchBtn" aria-label="Поиск"><i class="fas fa-search"></i></button>
+            </header>
+
             <main class="main-content" id="mainContent">
                 <section id="homeSection" class="page-section">
                     <header class="page-header">
@@ -42,12 +50,16 @@
                     </header>
                     <section class="hero-section">
                         <div class="hero-content">
-                            <h2>Слушай музыку без лишнего</h2>
-                            <p>Локальная библиотека и поиск треков в интернете с предпрослушиванием.</p>
-                            <button class="btn-primary" id="heroSearchBtn"><i class="fas fa-search"></i> Найти треки онлайн</button>
+                            <h2>Большая музыкальная библиотека</h2>
+                            <p>Ищите и слушайте треки целиком из открытых каталогов, открывайте тренды и сохраняйте избранное.</p>
+                            <button class="btn-primary" id="heroSearchBtn"><i class="fas fa-search"></i> Найти треки</button>
                         </div>
                         <div class="hero-abstract"></div>
                     </section>
+                    <div class="content-section">
+                        <div class="section-header"><h2>Сейчас в тренде</h2><button class="link-btn" id="refreshTrendingBtn">Обновить</button></div>
+                        <div class="tracks-list" id="trendingList"></div>
+                    </div>
                     <div class="content-section">
                         <div class="section-header"><h2>Моя библиотека</h2></div>
                         <div class="tracks-list" id="localTracksList"></div>
@@ -55,17 +67,34 @@
                 </section>
 
                 <section id="searchSection" class="page-section" style="display:none;">
-                    <header class="page-header"><h1>Поиск в интернете</h1></header>
+                    <header class="page-header"><h1>Поиск</h1></header>
                     <div class="search-panel">
                         <div class="search-input-wrap">
                             <i class="fas fa-search"></i>
-                            <input type="text" id="searchInput" placeholder="Введите название трека или исполнителя..." autocomplete="off">
+                            <input type="text" id="searchInput" placeholder="Трек, исполнитель, альбом..." autocomplete="off" enterkeyhint="search">
                         </div>
                         <button id="searchBtn" class="btn-primary"><i class="fas fa-globe"></i> Искать</button>
                     </div>
-                    <p class="search-hint">Поиск выполняется через Audius. Для найденных треков доступно воспроизведение целиком.</p>
+                    <div class="search-chips" id="searchChips">
+                        <button class="chip" data-query="top hits">Хиты</button>
+                        <button class="chip" data-query="pop">Поп</button>
+                        <button class="chip" data-query="rock">Рок</button>
+                        <button class="chip" data-query="hip hop">Хип-хоп</button>
+                        <button class="chip" data-query="rap">Рэп</button>
+                        <button class="chip" data-query="electronic">Электроника</button>
+                        <button class="chip" data-query="jazz">Джаз</button>
+                        <button class="chip" data-query="classical">Классика</button>
+                        <button class="chip" data-query="indie">Инди</button>
+                        <button class="chip" data-query="lofi">Lo-fi</button>
+                        <button class="chip" data-query="phonk">Phonk</button>
+                        <button class="chip" data-query="russian pop">Русское</button>
+                    </div>
+                    <p class="search-hint">Поиск по открытым каталогам (Audius, Internet Archive). Найденные треки доступны для воспроизведения целиком.</p>
                     <div id="searchStatus" class="search-status"></div>
                     <div class="tracks-list" id="searchResults"></div>
+                    <div class="load-more-wrap" id="loadMoreWrap" style="display:none;">
+                        <button class="btn-outline" id="loadMoreBtn"><i class="fas fa-plus"></i> Показать ещё</button>
+                    </div>
                 </section>
 
                 <section id="favoritesSection" class="page-section" style="display:none;">
@@ -102,12 +131,18 @@
                     <button class="control-btn" id="expandPlayerBtn" title="Развернуть"><i class="fas fa-expand"></i></button>
                 </div>
             </div>
+
+            <nav class="mobile-nav" id="mobileNav">
+                <button class="mobile-nav-item active" data-page="home"><i class="fas fa-home"></i><span>Главная</span></button>
+                <button class="mobile-nav-item" data-page="search"><i class="fas fa-search"></i><span>Поиск</span></button>
+                <button class="mobile-nav-item" data-page="favorites"><i class="fas fa-heart"></i><span>Избранное</span></button>
+            </nav>
         </div>
     </div>
 
     <div class="expanded-player" id="expandedPlayer" style="display:none;">
         <div class="expanded-header">
-            <button class="control-btn" id="closeExpandedBtn"><i class="fas fa-times"></i></button>
+            <button class="control-btn" id="closeExpandedBtn"><i class="fas fa-chevron-down"></i></button>
             <div class="expanded-title">Сейчас играет</div>
             <div></div>
         </div>
