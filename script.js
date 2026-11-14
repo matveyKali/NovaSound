@@ -1,330 +1,377 @@
-const API_BASE = 'https://api.deezer.com';
-const audio = document.getElementById('audioPlayer');
-let currentTrack = null;
-let isPlaying = false;
-let favorites = new Set();
-let volume = 0.7;
+document.addEventListener('DOMContentLoaded', function () {
+    const audio = document.getElementById('audioPlayer');
 
-// DOM elements
-const searchInput = document.getElementById('searchInput');
-const searchBtn = document.getElementById('searchBtn');
-const trackGrid = document.getElementById('trackGrid');
-const chartsGrid = document.getElementById('chartsGrid');
-const favoritesGrid = document.getElementById('favoritesGrid');
-const playerCover = document.getElementById('playerCover');
-const playerTitle = document.getElementById('playerTitle');
-const playerArtist = document.getElementById('playerArtist');
-const playPauseBtn = document.getElementById('playPauseBtn');
-const prevBtn = document.getElementById('prevBtn');
-const nextBtn = document.getElementById('nextBtn');
-const likeBtn = document.getElementById('likeBtn');
-const progress = document.getElementById('progress');
-const progressTrack = document.getElementById('progressTrack');
-const currentTimeEl = document.getElementById('currentTime');
-const durationEl = document.getElementById('duration');
-const volumeInput = document.getElementById('volume');
-const volumeIcon = document.getElementById('volumeIcon');
-const toast = document.getElementById('toast');
+    const LOCAL_TRACKS = [
+        { id: 'local-1', title: 'Warriyo - Mortals [NCS Release]', artist: 'Warriyo', cover: 'covers/1.jpg', src: 'songs/1.mp3', durationLabel: '3:50', source: 'Локально' },
+        { id: 'local-2', title: 'Dr. Dre, Snoop Dogg - Still D.R.E.', artist: 'Dr. Dre, Snoop Dogg', cover: 'covers/2.jpg', src: 'songs/2.mp3', durationLabel: '4:28', source: 'Локально' },
+        { id: 'local-3', title: 'Hollywood Undead - Riot', artist: 'Hollywood Undead', cover: 'covers/3.jpg', src: 'songs/3.mp3', durationLabel: '3:47', source: 'Локально' },
+        { id: 'local-4', title: 'This Is Madness (God of War)', artist: 'God of War', cover: 'covers/4.jpg', src: 'songs/4.mp3', durationLabel: '4:20', source: 'Локально' },
+        { id: 'local-5', title: 'SOLO (YXNG BANE REMIX)', artist: 'Demi Lovato', cover: 'covers/5.jpg', src: 'songs/5.mp3', durationLabel: '3:41', source: 'Локально' },
+        { id: 'local-6', title: 'After Dark', artist: 'Mr.Kitty', cover: 'covers/6.jpg', src: 'songs/6.mp3', durationLabel: '4:19', source: 'Локально' },
+        { id: 'local-7', title: "Coolio - Gangsta's Paradise", artist: 'Coolio feat. L.V.', cover: 'covers/7.jpg', src: 'songs/7.mp3', durationLabel: '4:01', source: 'Локально' },
+        { id: 'local-8', title: "Beethoven - Fur Elise (Remix)", artist: 'Beethoven', cover: 'covers/8.jpg', src: 'songs/8.mp3', durationLabel: '2:23', source: 'Локально' }
+    ];
 
-// Nav items
-const navItems = document.querySelectorAll('.nav-item');
+    const els = {
+        navItems: document.querySelectorAll('.nav-item'),
+        pageTitle: document.getElementById('pageTitle'),
+        homeSection: document.getElementById('homeSection'),
+        searchSection: document.getElementById('searchSection'),
+        favoritesSection: document.getElementById('favoritesSection'),
+        localTracksList: document.getElementById('localTracksList'),
+        searchResults: document.getElementById('searchResults'),
+        favoritesList: document.getElementById('favoritesList'),
+        searchInput: document.getElementById('searchInput'),
+        searchBtn: document.getElementById('searchBtn'),
+        heroSearchBtn: document.getElementById('heroSearchBtn'),
+        searchStatus: document.getElementById('searchStatus'),
+        playerCoverImg: document.getElementById('playerCoverImg'),
+        playerTitle: document.getElementById('playerTitle'),
+        playerArtist: document.getElementById('playerArtist'),
+        playPauseBtn: document.getElementById('playPauseBtn'),
+        prevBtn: document.getElementById('prevBtn'),
+        nextBtn: document.getElementById('nextBtn'),
+        playerLikeBtn: document.getElementById('playerLikeBtn'),
+        progress: document.getElementById('progress'),
+        progressBar: document.getElementById('progressBar'),
+        currentTime: document.getElementById('currentTime'),
+        duration: document.getElementById('duration'),
+        volumeSlider: document.getElementById('volumeSlider'),
+        volumeIcon: document.getElementById('volumeIcon'),
+        toast: document.getElementById('toast'),
+        expandedPlayer: document.getElementById('expandedPlayer'),
+        expandPlayerBtn: document.getElementById('expandPlayerBtn'),
+        closeExpandedBtn: document.getElementById('closeExpandedBtn'),
+        expandedCover: document.getElementById('expandedCover'),
+        expandedTitle: document.getElementById('expandedTitle'),
+        expandedArtist: document.getElementById('expandedArtist'),
+        expandedPlayPauseBtn: document.getElementById('expandedPlayPauseBtn'),
+        expandedPrevBtn: document.getElementById('expandedPrevBtn'),
+        expandedNextBtn: document.getElementById('expandedNextBtn'),
+        expandedLikeBtn: document.getElementById('expandedLikeBtn'),
+        expandedProgress: document.getElementById('expandedProgress'),
+        expandedProgressBar: document.getElementById('expandedProgressBar'),
+        expandedCurrentTime: document.getElementById('expandedCurrentTime'),
+        expandedDuration: document.getElementById('expandedDuration')
+    };
 
-// Init
-audio.volume = volume;
-volumeInput.value = volume * 100;
+    let currentTrack = null;
+    let currentQueue = [...LOCAL_TRACKS];
+    let isPlaying = false;
+    let favorites = loadFavorites();
 
-// Format time
-function formatTime(seconds) {
-    if (!seconds || isNaN(seconds)) return '0:00';
-    const m = Math.floor(seconds / 60);
-    const s = Math.floor(seconds % 60);
-    return `${m}:${s < 10 ? '0' : ''}${s}`;
-}
+    audio.volume = 0.7;
+    if (els.volumeSlider) els.volumeSlider.value = 70;
 
-// Show toast
-function showToast(message) {
-    toast.textContent = message;
-    toast.classList.add('show');
-    setTimeout(() => toast.classList.remove('show'), 2500);
-}
+    function esc(text) {
+        const d = document.createElement('div');
+        d.textContent = text == null ? '' : String(text);
+        return d.innerHTML;
+    }
 
-// Render track card
-function createTrackCard(track, containerId = 'trackGrid') {
-    const container = document.getElementById(containerId);
-    const card = document.createElement('div');
-    card.className = 'track-card';
-    card.dataset.trackId = track.id;
-    card.dataset.preview = track.preview || '';
-    card.dataset.title = track.title || '';
-    card.dataset.artist = track.artist ? track.artist.name : '';
-    card.dataset.cover = track.album ? track.album.cover_medium : '';
+    function formatTime(seconds) {
+        if (!seconds || isNaN(seconds)) return '0:00';
+        const m = Math.floor(seconds / 60);
+        const s = Math.floor(seconds % 60);
+        return m + ':' + (s < 10 ? '0' : '') + s;
+    }
 
-    const isLiked = favorites.has(track.id);
-    card.innerHTML = `
-        <div class="track-cover">
-            <img src="${track.album ? track.album.cover_medium : ''}" alt="${track.title}">
-            <div class="play-badge"><i class="fas fa-play"></i></div>
-            <div class="like-overlay ${isLiked ? 'liked' : ''}">
-                <i class="fas fa-heart ${isLiked ? 'fas' : 'far'}"></i>
-            </div>
-        </div>
-        <div class="track-info">
-            <h3>${escapeHtml(track.title)}</h3>
-            <p>${escapeHtml(track.artist ? track.artist.name : 'Неизвестный исполнитель')}</p>
-        </div>
-    `;
+    function showToast(msg) {
+        if (!els.toast) return;
+        els.toast.textContent = msg;
+        els.toast.classList.add('show');
+        clearTimeout(showToast._t);
+        showToast._t = setTimeout(() => els.toast.classList.remove('show'), 2600);
+    }
 
-    card.addEventListener('click', (e) => {
-        if (e.target.closest('.like-overlay')) return;
-        loadTrack(track);
-    });
+    function loadFavorites() {
+        try {
+            const raw = localStorage.getItem('nova_favorites');
+            if (!raw) return new Map();
+            const arr = JSON.parse(raw);
+            return new Map(arr.map(t => [t.id, t]));
+        } catch (_) {
+            return new Map();
+        }
+    }
 
-    card.querySelector('.like-overlay').addEventListener('click', (e) => {
-        e.stopPropagation();
-        toggleFavorite(track.id, card.querySelector('.like-overlay i'));
-    });
+    function saveFavorites() {
+        try {
+            localStorage.setItem('nova_favorites', JSON.stringify(Array.from(favorites.values())));
+        } catch (_) {}
+    }
 
-    container.appendChild(card);
-}
+    function isFavorite(id) {
+        return favorites.has(id);
+    }
 
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
+    function toggleFavorite(track) {
+        if (!track) return;
+        if (favorites.has(track.id)) {
+            favorites.delete(track.id);
+            showToast('Удалено из избранного');
+        } else {
+            favorites.set(track.id, track);
+            showToast('Добавлено в избранное');
+        }
+        saveFavorites();
+        updateLikeButtons();
+        renderFavorites();
+        rerenderVisibleLists();
+    }
 
-// Load track into player
-function loadTrack(track) {
-    currentTrack = track;
-    playerCover.src = track.album ? track.album.cover_medium : '';
-    playerTitle.textContent = track.title;
-    playerArtist.textContent = track.artist ? track.artist.name : 'Неизвестный исполнитель';
+    function rerenderVisibleLists() {
+        if (els.homeSection && els.homeSection.style.display !== 'none') renderTracks(LOCAL_TRACKS, els.localTracksList);
+        if (els.searchSection && els.searchSection.style.display !== 'none' && els.searchResults && els.searchResults._lastTracks) {
+            renderTracks(els.searchResults._lastTracks, els.searchResults);
+        }
+    }
 
-    const preview = track.preview;
-    if (preview) {
-        audio.src = preview;
+    function trackCard(track) {
+        const liked = isFavorite(track.id);
+        const cover = track.cover || 'https://via.placeholder.com/300x300/1a1a1a/777777?text=%E2%99%AA';
+        const duration = track.durationLabel || '';
+        const source = track.source || '';
+        return '' +
+            '<div class="track-card" data-id="' + esc(track.id) + '">' +
+            '  <div class="track-cover-wrapper">' +
+            '    <img src="' + esc(cover) + '" alt="' + esc(track.title) + '" loading="lazy">' +
+            '    <div class="play-overlay"><i class="fas fa-play"></i></div>' +
+            '    <button class="like-badge ' + (liked ? 'liked' : '') + '" data-like-id="' + esc(track.id) + '" aria-label="В избранное">' +
+            '      <i class="' + (liked ? 'fas' : 'far') + ' fa-heart"></i>' +
+            '    </button>' +
+            '  </div>' +
+            '  <div class="track-info">' +
+            '    <h3 title="' + esc(track.title) + '">' + esc(track.title) + '</h3>' +
+            '    <p title="' + esc(track.artist) + '">' + esc(track.artist) + '</p>' +
+            '  </div>' +
+            '  <div class="track-meta"><span>' + esc(source) + '</span><span>' + esc(duration) + '</span></div>' +
+            '</div>';
+    }
+
+    function renderTracks(list, container) {
+        if (!container) return;
+        container._lastTracks = list;
+        if (!list || list.length === 0) {
+            container.innerHTML = '<div class="empty-state"><i class="fas fa-music"></i><h3>Ничего не найдено</h3><p>Попробуйте другой запрос или откройте библиотеку.</p></div>';
+            return;
+        }
+        container.innerHTML = list.map(trackCard).join('');
+
+        container.querySelectorAll('.track-card').forEach(card => {
+            const id = card.getAttribute('data-id');
+            card.addEventListener('click', (e) => {
+                if (e.target.closest('.like-badge')) return;
+                const t = list.find(x => x.id === id);
+                if (t) playTrack(t, list);
+            });
+        });
+        container.querySelectorAll('.like-badge').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const id = btn.getAttribute('data-like-id');
+                const t = list.find(x => x.id === id) || favorites.get(id);
+                if (t) toggleFavorite(t);
+            });
+        });
+    }
+
+    function renderFavorites() {
+        if (!els.favoritesList) return;
+        const list = Array.from(favorites.values());
+        if (list.length === 0) {
+            els.favoritesList.innerHTML = '<div class="empty-state"><i class="fas fa-heart"></i><h3>В избранном пусто</h3><p>Нажмите на сердечко у трека, чтобы сохранить его здесь.</p></div>';
+            return;
+        }
+        renderTracks(list, els.favoritesList);
+    }
+
+    function updateLikeButtons() {
+        if (currentTrack) {
+            const liked = isFavorite(currentTrack.id);
+            if (els.playerLikeBtn) {
+                els.playerLikeBtn.classList.toggle('liked', liked);
+                els.playerLikeBtn.innerHTML = '<i class="' + (liked ? 'fas' : 'far') + ' fa-heart"></i>';
+            }
+            if (els.expandedLikeBtn) {
+                els.expandedLikeBtn.innerHTML = '<i class="' + (liked ? 'fas' : 'far') + ' fa-heart"></i>';
+            }
+        }
+    }
+
+    function setPlayerUI(track) {
+        const cover = track.cover || 'https://via.placeholder.com/300x300/1a1a1a/777777?text=%E2%99%AA';
+        if (els.playerCoverImg) els.playerCoverImg.src = cover;
+        if (els.playerTitle) els.playerTitle.textContent = track.title || 'Без названия';
+        if (els.playerArtist) els.playerArtist.textContent = track.artist || 'Неизвестный исполнитель';
+        if (els.expandedCover) els.expandedCover.src = cover;
+        if (els.expandedTitle) els.expandedTitle.textContent = track.title || 'Без названия';
+        if (els.expandedArtist) els.expandedArtist.textContent = track.artist || 'Неизвестный исполнитель';
+        updateLikeButtons();
+    }
+
+    function playTrack(track, queue) {
+        if (!track || !track.src) {
+            showToast('Нет аудио для этого трека');
+            return;
+        }
+        currentTrack = track;
+        if (Array.isArray(queue) && queue.length) currentQueue = queue;
+        setPlayerUI(track);
+        audio.src = track.src;
         audio.play().then(() => {
             isPlaying = true;
-            updatePlayButton();
-        }).catch(err => {
-            console.error('Playback error:', err);
+            updatePlayButtons();
+        }).catch(() => {
+            isPlaying = false;
+            updatePlayButtons();
             showToast('Не удалось воспроизвести трек');
         });
-    } else {
-        audio.src = '';
-        showToast('Предпросмотр недоступен для этого трека');
     }
 
-    if (favorites.has(track.id)) {
-        likeBtn.innerHTML = '<i class="fas fa-heart"></i>';
-        likeBtn.classList.add('liked');
-    } else {
-        likeBtn.innerHTML = '<i class="far fa-heart"></i>';
-        likeBtn.classList.remove('liked');
+    function updatePlayButtons() {
+        const icon = isPlaying ? 'fa-pause' : 'fa-play';
+        if (els.playPauseBtn) els.playPauseBtn.innerHTML = '<i class="fas ' + icon + '"></i>';
+        if (els.expandedPlayPauseBtn) els.expandedPlayPauseBtn.innerHTML = '<i class="fas ' + icon + '"></i>';
     }
 
-    document.getElementById('playerBar').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-}
-
-// Toggle favorite
-function toggleFavorite(trackId, iconEl) {
-    if (favorites.has(trackId)) {
-        favorites.delete(trackId);
-        iconEl.classList.remove('fas');
-        iconEl.classList.add('far');
-        showToast('Удалено из избранного');
-    } else {
-        favorites.add(trackId);
-        iconEl.classList.remove('far');
-        iconEl.classList.add('fas');
-        showToast('Добавлено в избранное');
-    }
-
-    updateLikeButton();
-    renderFavorites();
-}
-
-function updateLikeButton() {
-    if (!currentTrack) return;
-    if (favorites.has(currentTrack.id)) {
-        likeBtn.innerHTML = '<i class="fas fa-heart"></i>';
-        likeBtn.classList.add('liked');
-    } else {
-        likeBtn.innerHTML = '<i class="far fa-heart"></i>';
-        likeBtn.classList.remove('liked');
-    }
-}
-
-// Search Deezer
-async function searchTracks(query) {
-    try {
-        const res = await fetch(`${API_BASE}/search?q=${encodeURIComponent(query)}&limit=20`);
-        const data = await res.json();
-        return data.data || [];
-    } catch (err) {
-        console.error('Search error:', err);
-        showToast('Ошибка поиска');
-        return [];
-    }
-}
-
-// Fetch popular charts
-async function fetchCharts() {
-    try {
-        const res = await fetch(`${API_BASE}/chart/0/tracks?limit=20`);
-        const data = await res.json();
-        return data.data || [];
-    } catch (err) {
-        console.error('Charts error:', err);
-        return [];
-    }
-}
-
-// Render grid
-function renderTracks(tracks, containerId) {
-    const container = document.getElementById(containerId);
-    container.innerHTML = '';
-    tracks.forEach(track => createTrackCard(track, containerId));
-}
-
-// Search handler
-async function handleSearch() {
-    const query = searchInput.value.trim();
-    if (!query) {
-        trackGrid.innerHTML = '';
-        return;
-    }
-    const tracks = await searchTracks(query);
-    renderTracks(tracks, 'trackGrid');
-    document.getElementById('searchSection').style.display = 'block';
-}
-
-// Player controls
-playPauseBtn.addEventListener('click', () => {
-    if (!currentTrack) return;
-    if (isPlaying) {
-        audio.pause();
-        isPlaying = false;
-    } else {
-        audio.play().catch(() => showToast('Не удалось воспроизвести'));
-        isPlaying = true;
-    }
-    updatePlayButton();
-});
-
-function updatePlayButton() {
-    const icon = playPauseBtn.querySelector('i');
-    if (isPlaying) {
-        icon.classList.remove('fa-play');
-        icon.classList.add('fa-pause');
-    } else {
-        icon.classList.remove('fa-pause');
-        icon.classList.add('fa-play');
-    }
-}
-
-prevBtn.addEventListener('click', () => {
-    if (!currentTrack) return;
-    audio.currentTime = 0;
-});
-
-nextBtn.addEventListener('click', () => {
-    showToast('Включите повтор в настройках (скоро)');
-});
-
-likeBtn.addEventListener('click', () => {
-    if (!currentTrack) return;
-    toggleFavorite(currentTrack.id, likeBtn.querySelector('i'));
-});
-
-// Progress
-audio.addEventListener('timeupdate', () => {
-    if (audio.duration) {
-        const pct = (audio.currentTime / audio.duration) * 100;
-        progress.style.width = pct + '%';
-        currentTimeEl.textContent = formatTime(audio.currentTime);
-        durationEl.textContent = formatTime(audio.duration);
-    }
-});
-
-audio.addEventListener('loadedmetadata', () => {
-    durationEl.textContent = formatTime(audio.duration);
-});
-
-audio.addEventListener('ended', () => {
-    isPlaying = false;
-    updatePlayButton();
-});
-
-progressTrack.addEventListener('click', (e) => {
-    if (!audio.duration) return;
-    const rect = progressTrack.getBoundingClientRect();
-    const pos = (e.clientX - rect.left) / rect.width;
-    audio.currentTime = pos * audio.duration;
-});
-
-// Volume
-volumeInput.addEventListener('input', (e) => {
-    volume = e.target.value / 100;
-    audio.volume = volume;
-    updateVolumeIcon();
-});
-
-function updateVolumeIcon() {
-    if (volume === 0) {
-        volumeIcon.className = 'fas fa-volume-mute';
-    } else if (volume < 0.5) {
-        volumeIcon.className = 'fas fa-volume-down';
-    } else {
-        volumeIcon.className = 'fas fa-volume-up';
-    }
-}
-
-// Navigation
-navItems.forEach(item => {
-    item.addEventListener('click', () => {
-        navItems.forEach(i => i.classList.remove('active'));
-        item.classList.add('active');
-
-        const page = item.dataset.page;
-        document.getElementById('searchSection').style.display = 'none';
-        document.getElementById('chartsSection').style.display = 'none';
-        document.getElementById('librarySection').style.display = 'none';
-        document.getElementById('favoritesSection').style.display = 'none';
-
-        if (page === 'search') {
-            document.getElementById('searchSection').style.display = 'block';
-            document.getElementById('pageTitle').textContent = 'Поиск музыки';
-        } else if (page === 'charts') {
-            document.getElementById('chartsSection').style.display = 'block';
-            document.getElementById('pageTitle').textContent = 'Чарты';
-        } else if (page === 'library') {
-            document.getElementById('librarySection').style.display = 'block';
-            document.getElementById('pageTitle').textContent = 'Библиотека';
-        } else if (page === 'favorites') {
-            document.getElementById('favoritesSection').style.display = 'block';
-            document.getElementById('pageTitle').textContent = 'Избранное';
-            renderFavorites();
+    function togglePlay() {
+        if (!currentTrack) {
+            playTrack(LOCAL_TRACKS[0], LOCAL_TRACKS);
+            return;
         }
-    });
-});
-
-function renderFavorites() {
-    favoritesGrid.innerHTML = '';
-    if (favorites.size === 0) {
-        favoritesGrid.innerHTML = '<p class="empty-state">Избранное пусто</p>';
-        return;
+        if (isPlaying) {
+            audio.pause();
+            isPlaying = false;
+        } else {
+            audio.play().catch(() => showToast('Ошибка воспроизведения'));
+            isPlaying = true;
+        }
+        updatePlayButtons();
     }
-    favorites.forEach(id => {
-        // Re-fetch is not ideal, but we store minimal info. For simplicity, skip if not cached.
+
+    function playByOffset(offset) {
+        if (!currentTrack || !currentQueue.length) return;
+        const idx = currentQueue.findIndex(t => t.id === currentTrack.id);
+        if (idx === -1) return;
+        const next = currentQueue[(idx + offset + currentQueue.length) % currentQueue.length];
+        if (next) playTrack(next, currentQueue);
+    }
+
+    function updateProgressUI(current, total) {
+        const pct = total ? (current / total) * 100 : 0;
+        if (els.progress) els.progress.style.width = pct + '%';
+        if (els.expandedProgress) els.expandedProgress.style.width = pct + '%';
+        const ct = formatTime(current);
+        const dt = formatTime(total);
+        if (els.currentTime) els.currentTime.textContent = ct;
+        if (els.duration) els.duration.textContent = dt;
+        if (els.expandedCurrentTime) els.expandedCurrentTime.textContent = ct;
+        if (els.expandedDuration) els.expandedDuration.textContent = dt;
+    }
+
+    function seekFromEvent(bar, e) {
+        if (!bar || !audio.duration) return;
+        const rect = bar.getBoundingClientRect();
+        const pos = Math.min(Math.max((e.clientX - rect.left) / rect.width, 0), 1);
+        audio.currentTime = pos * audio.duration;
+    }
+
+    function updateVolumeIcon(v) {
+        if (!els.volumeIcon) return;
+        if (v === 0) els.volumeIcon.className = 'fas fa-volume-mute';
+        else if (v < 0.5) els.volumeIcon.className = 'fas fa-volume-down';
+        else els.volumeIcon.className = 'fas fa-volume-up';
+    }
+
+    function showPage(page) {
+        if (els.homeSection) els.homeSection.style.display = page === 'home' ? 'block' : 'none';
+        if (els.searchSection) els.searchSection.style.display = page === 'search' ? 'block' : 'none';
+        if (els.favoritesSection) els.favoritesSection.style.display = page === 'favorites' ? 'block' : 'none';
+        const titles = { home: 'Главная', search: 'Поиск в интернете', favorites: 'Избранное' };
+        if (els.pageTitle) els.pageTitle.textContent = titles[page] || 'Главная';
+        els.navItems.forEach(i => i.classList.toggle('active', i.dataset.page === page));
+        if (page === 'home') renderTracks(LOCAL_TRACKS, els.localTracksList);
+        if (page === 'favorites') renderFavorites();
+        if (page === 'search' && els.searchInput) els.searchInput.focus();
+    }
+
+    async function searchOnline(query) {
+        const q = (query || '').trim();
+        if (!q) {
+            if (els.searchStatus) els.searchStatus.textContent = 'Введите запрос для поиска.';
+            renderTracks([], els.searchResults);
+            return;
+        }
+        if (els.searchStatus) els.searchStatus.textContent = 'Ищу треки в интернете...';
+        if (els.searchResults) els.searchResults.innerHTML = '';
+        try {
+            const url = 'https://itunes.apple.com/search?term=' + encodeURIComponent(q) + '&media=music&entity=song&limit=24';
+            const res = await fetch(url);
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const data = await res.json();
+            const tracks = (data.results || []).map(item => ({
+                id: 'itunes-' + item.trackId,
+                title: item.trackName || 'Без названия',
+                artist: item.artistName || 'Неизвестный исполнитель',
+                cover: item.artworkUrl100 ? item.artworkUrl100.replace('100x100bb', '300x300bb') : '',
+                src: item.previewUrl || '',
+                durationLabel: item.trackTimeMillis ? formatTime(item.trackTimeMillis / 1000) : 'Превью',
+                source: 'iTunes'
+            }));
+            if (tracks.length === 0) {
+                if (els.searchStatus) els.searchStatus.textContent = 'Ничего не найдено. Попробуйте другой запрос.';
+            } else {
+                if (els.searchStatus) els.searchStatus.textContent = 'Найдено треков: ' + tracks.length + '. Доступно прослушивание превью.';
+            }
+            renderTracks(tracks, els.searchResults);
+        } catch (err) {
+            if (els.searchStatus) els.searchStatus.textContent = 'Не удалось выполнить поиск в интернете. Проверьте подключение.';
+            if (els.searchResults) {
+                els.searchResults.innerHTML = '<div class="empty-state"><i class="fas fa-triangle-exclamation"></i><h3>Ошибка поиска</h3><p>Сервис поиска недоступен или заблокирован сетью.</p></div>';
+            }
+        }
+    }
+
+    audio.addEventListener('timeupdate', () => updateProgressUI(audio.currentTime, audio.duration));
+    audio.addEventListener('loadedmetadata', () => updateProgressUI(audio.currentTime, audio.duration));
+    audio.addEventListener('ended', () => { isPlaying = false; updatePlayButtons(); playByOffset(1); });
+
+    if (els.playPauseBtn) els.playPauseBtn.addEventListener('click', togglePlay);
+    if (els.expandedPlayPauseBtn) els.expandedPlayPauseBtn.addEventListener('click', togglePlay);
+    if (els.prevBtn) els.prevBtn.addEventListener('click', () => { if (currentTrack && audio.currentTime > 3) audio.currentTime = 0; else playByOffset(-1); });
+    if (els.nextBtn) els.nextBtn.addEventListener('click', () => playByOffset(1));
+    if (els.expandedPrevBtn) els.expandedPrevBtn.addEventListener('click', () => { if (currentTrack && audio.currentTime > 3) audio.currentTime = 0; else playByOffset(-1); });
+    if (els.expandedNextBtn) els.expandedNextBtn.addEventListener('click', () => playByOffset(1));
+
+    if (els.playerLikeBtn) els.playerLikeBtn.addEventListener('click', () => { if (currentTrack) toggleFavorite(currentTrack); });
+    if (els.expandedLikeBtn) els.expandedLikeBtn.addEventListener('click', () => { if (currentTrack) toggleFavorite(currentTrack); });
+
+    if (els.progressBar) els.progressBar.addEventListener('click', (e) => seekFromEvent(els.progressBar, e));
+    if (els.expandedProgressBar) els.expandedProgressBar.addEventListener('click', (e) => seekFromEvent(els.expandedProgressBar, e));
+
+    if (els.volumeSlider) {
+        els.volumeSlider.addEventListener('input', (e) => {
+            const v = Number(e.target.value) / 100;
+            audio.volume = v;
+            updateVolumeIcon(v);
+        });
+    }
+
+    if (els.searchBtn) els.searchBtn.addEventListener('click', () => searchOnline(els.searchInput ? els.searchInput.value : ''));
+    if (els.searchInput) els.searchInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') searchOnline(els.searchInput.value); });
+    if (els.heroSearchBtn) els.heroSearchBtn.addEventListener('click', () => { showPage('search'); });
+
+    els.navItems.forEach(item => {
+        item.addEventListener('click', () => showPage(item.dataset.page || 'home'));
     });
-}
 
-// Search events
-searchBtn.addEventListener('click', handleSearch);
-searchInput.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') handleSearch();
+    if (els.expandPlayerBtn) els.expandPlayerBtn.addEventListener('click', () => { if (els.expandedPlayer) els.expandedPlayer.style.display = 'flex'; });
+    if (els.closeExpandedBtn) els.closeExpandedBtn.addEventListener('click', () => { if (els.expandedPlayer) els.expandedPlayer.style.display = 'none'; });
+
+    renderTracks(LOCAL_TRACKS, els.localTracksList);
+    renderFavorites();
+    updatePlayButtons();
+    updateVolumeIcon(audio.volume);
+    showPage('home');
 });
-
-// Init charts
-fetchCharts().then(tracks => renderTracks(tracks, 'chartsGrid'));
