@@ -148,13 +148,13 @@
     function trackCard(track) {
         const liked = isFavorite(track.id);
         const cover = track.cover || 'https://via.placeholder.com/300x300/1a1a1a/777777?text=%E2%99%AA';
-        const preview = track.full ? '' : '<span class="badge-preview">превью</span>';
+        const badge = track.full ? '' : (track.needsResolve ? '<span class="badge-preview">найти целиком</span>' : '<span class="badge-preview">превью</span>');
         return '<div class="track-card" data-id="' + esc(track.id) + '">' +
             '<div class="track-cover-wrapper"><img src="' + esc(cover) + '" alt="" loading="lazy" decoding="async">' +
             '<div class="play-overlay"><i class="fas fa-play"></i></div>' +
             '<button class="like-badge ' + (liked ? 'liked' : '') + '" data-like-id="' + esc(track.id) + '"><i class="' + (liked ? 'fas' : 'far') + ' fa-heart"></i></button></div>' +
             '<div class="track-info"><h3 title="' + esc(track.title) + '">' + esc(track.title) + '</h3><p title="' + esc(track.artist) + '">' + esc(track.artist) + '</p></div>' +
-            '<div class="track-meta"><span>' + esc(track.source || '') + '</span>' + (preview || '<span>' + esc(track.durationLabel || '') + '</span>') + '</div></div>';
+            '<div class="track-meta"><span>' + esc(track.source || '') + '</span>' + (badge || '<span>' + esc(track.durationLabel || '') + '</span>') + '</div></div>';
     }
 
     function renderTracks(list, container) {
@@ -225,10 +225,32 @@
         if (wave.active) updateWaveStage(track);
     }
 
-    function playTrack(track, queue, fromWave) {
+    let playRequest = 0;
+    async function playTrack(track, queue, fromWave) {
         if (!track || !track.src) { showToast('Нет аудио для этого трека'); return; }
+        const req = ++playRequest;
         currentTrack = track;
         if (Array.isArray(queue) && queue.length) currentQueue = queue;
+
+        if (track.needsResolve && !track.full) {
+            setPlayerUI(track);
+            showToast('Ищу полный трек в других источниках...');
+            const resolved = await resolveFullTrack(track);
+            if (req !== playRequest) return;
+            if (resolved && resolved.full) {
+                showToast('Найден полный трек: ' + (resolved.resolvedFrom || 'другой источник'));
+                rerenderVisibleLists();
+            } else if (!track.previewSrc) {
+                showToast('Полная версия не найдена в открытых источниках');
+                if (wave.active || fromWave) setTimeout(() => waveNext(), 700);
+                return;
+            } else {
+                track.src = track.previewSrc;
+                showToast('Полная версия не найдена, играю превью');
+                rerenderVisibleLists();
+            }
+        }
+
         setPlayerUI(track);
         audio.src = track.src;
         addToHistory(track);
@@ -364,8 +386,12 @@
         const list = (data && data.data) ? data.data : [];
         return list.map(t => ({
             id: 'dz-' + t.id, title: t.title || 'Без названия', artist: (t.artist && t.artist.name) ? t.artist.name : 'Deezer',
-            cover: (t.album && (t.album.cover_big || t.album.cover_medium || t.album.cover)) || '', src: t.preview || '',
-            durationLabel: t.duration ? formatTime(t.duration) : '0:30', source: 'Deezer', full: false
+            cover: (t.album && (t.album.cover_big || t.album.cover_medium || t.album.cover)) || '',
+            previewSrc: t.preview || '',
+            src: t.preview || '',
+            durationLabel: t.duration ? formatTime(t.duration) : '0:30',
+            originalDuration: t.duration || 0,
+            source: 'Deezer', full: false, needsResolve: true
         })).filter(t => t.src);
     }
 
@@ -375,20 +401,60 @@
         const list = (data && data.results) ? data.results : [];
         return list.map(t => ({
             id: 'it-' + t.trackId, title: t.trackName || 'Без названия', artist: t.artistName || 'iTunes',
-            cover: (t.artworkUrl100 || '').replace('100x100bb', '300x300bb'), src: t.previewUrl || '',
-            durationLabel: t.trackTimeMillis ? formatTime(t.trackTimeMillis / 1000) : '0:30', source: 'iTunes', full: false
+            cover: (t.artworkUrl100 || '').replace('100x100bb', '300x300bb'),
+            previewSrc: t.previewUrl || '',
+            src: t.previewUrl || '',
+            durationLabel: t.trackTimeMillis ? formatTime(t.trackTimeMillis / 1000) : '0:30',
+            originalDuration: t.trackTimeMillis ? Math.round(t.trackTimeMillis / 1000) : 0,
+            source: 'iTunes', full: false, needsResolve: true
         })).filter(t => t.src);
     }
 
+    function normalizeTitle(s) {
+        return String(s || '').toLowerCase().replace(/\(.*?\)|\[.*?\]/g, ' ').replace(/feat\.?|ft\.?/g, ' ').replace(/[^a-zа-яё0-9\s]/gi, ' ').replace(/\s+/g, ' ').trim();
+    }
+    function titleMatches(a, b) {
+        const na = normalizeTitle(a), nb = normalizeTitle(b);
+        if (!na || !nb) return false;
+        return na === nb || na.indexOf(nb) >= 0 || nb.indexOf(na) >= 0;
+    }
     function dedupe(tracks) {
         const seen = new Set(), out = [];
         tracks.forEach(t => {
-            const k = (t.title || '').toLowerCase().replace(/\s+/g, ' ').trim() + '|' + (t.artist || '').toLowerCase().replace(/\s+/g, ' ').trim();
+            const k = normalizeTitle(t.title) + '|' + normalizeTitle(t.artist);
             const k2 = t.id;
             if (!k.trim() || k === '|') { if (seen.has(k2)) return; seen.add(k2); out.push(t); return; }
             if (seen.has(k) || seen.has(k2)) return; seen.add(k); seen.add(k2); out.push(t);
         });
         return out;
+    }
+
+    async function resolveFullTrack(track) {
+        if (!track || track.full || track.resolving) return track;
+        track.resolving = true;
+        const q = ((track.artist || '') + ' ' + (track.title || '')).trim();
+        try {
+            const tasks = [
+                searchAudius(q, 10, 0).catch(() => []),
+                searchHearThis(q, 1).catch(() => []),
+                searchIA(q, 1, 10).catch(() => [])
+            ];
+            const res = await Promise.all(tasks);
+            const candidates = dedupe([].concat(res[0] || [], res[1] || [], res[2] || []));
+            const match = candidates.find(c => c && c.src && c.full && titleMatches(c.title, track.title));
+            if (match) {
+                track.originalSource = track.source;
+                track.src = match.src;
+                track.full = true;
+                track.needsResolve = false;
+                if (!track.cover || /placeholder/.test(track.cover)) track.cover = match.cover || track.cover;
+                if (match.durationLabel) track.durationLabel = match.durationLabel;
+                track.source = track.originalSource + ' → ' + match.source;
+                track.resolvedFrom = match.source;
+            }
+        } catch (_) {}
+        track.resolving = false;
+        return track;
     }
 
     async function aggregateSearch(query, offsets) {
@@ -403,7 +469,7 @@
         const res = await Promise.all(tasks);
         const [a, h, ia, d, it] = res.map(r => r || []);
         const full = dedupe([].concat(a, h, ia));
-        const preview = dedupe([].concat(d, it));
+        const preview = dedupe([].concat(d, it)).filter(p => !full.some(f => titleMatches(f.title, p.title) && normalizeTitle(f.artist) === normalizeTitle(p.artist)));
         return { tracks: dedupe([].concat(full, preview)), counts: { audius: a.length, hearthis: h.length, ia: ia.length, deezer: d.length, itunes: it.length } };
     }
 
